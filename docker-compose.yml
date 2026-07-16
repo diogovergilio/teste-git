@@ -1,0 +1,16 @@
+# Sobe o coletor (build local a partir deste repo). Roda dentro da VPS do cliente.
+# network_mode: host → alcança o MariaDB local em 127.0.0.1:3306 e faz a conexão de SAÍDA
+# para o hub. Nenhuma porta de entrada é aberta.
+#
+#   cp .env.example .env   # preencha
+#   docker compose --env-file .env up -d --build
+#   docker compose logs -f
+
+services:
+  collector:
+    build: .
+    image: dashcall-collector:latest
+    container_name: dashcall-collector
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
