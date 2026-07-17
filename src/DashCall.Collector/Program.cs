@@ -22,4 +22,6 @@ using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
 Console.WriteLine($"[collector] tenant={tenantId} -> {hubUri}");
-await new HubConnection(hubUri, token).RunAsync(source.StreamAsync(cts.Token), cts.Token);
+// A mesma instância é fonte de snapshots (ICallCenterSource) E de relatórios (IReportSource).
+await new HubConnection(hubUri, token)
+    .RunAsync(source.StreamAsync(cts.Token), (IReportSource)source, cts.Token);

@@ -82,6 +82,119 @@ public sealed class CallCenterDb
             Ranking: ranking);
     }
 
+    // ---- Relatório por período ----------------------------------------------
+
+    private sealed record ReportSummaryRow(int Total, int Atendidas, int Perdas, int Tma, int Tme, double Sla);
+
+    /// Monta um <see cref="ReportData"/> para a janela [inicio, fim) (fim exclusivo).
+    /// Abre a conexão read-only como o BuildSnapshotAsync e roda as três queries do relatório.
+    public async Task<ReportData> BuildReportAsync(DateTime inicio, DateTime fim, CancellationToken ct)
+    {
+        await using var conn = new MySqlConnection(_connectionString);
+        await conn.OpenAsync(ct);
+
+        var summary = await GetReportSummaryAsync(conn, inicio, fim, ct);
+        var agents = await GetReportByAgentAsync(conn, inicio, fim, ct);
+        var queues = await GetReportByQueueAsync(conn, inicio, fim, ct);
+
+        return new ReportData(
+            Inicio: new DateTimeOffset(inicio, TimeSpan.Zero),
+            Fim: new DateTimeOffset(fim, TimeSpan.Zero),
+            Summary: summary,
+            Agents: agents,
+            Queues: queues);
+    }
+
+    /// Consolidado global do período (mesma lógica de paridade, sem GROUP BY, com janela [inicio, fim)).
+    /// Percentuais calculados em C# (2 casas).
+    private static async Task<ReportSummary> GetReportSummaryAsync(
+        MySqlConnection conn, DateTime inicio, DateTime fim, CancellationToken ct)
+    {
+        const string sql = @"
+SELECT COUNT(*) total, SUM(a.status='terminada') atendidas,
+  SUM(a.status='abandonada') perdas,
+  ROUND(IFNULL(SUM(a.duration)/COUNT(a.id),0)) tma, ROUND(IFNULL(SUM(a.duration_wait)/COUNT(a.id),0)) tme,
+  ROUND(100*SUM(a.duration_wait<=d.data)/COUNT(*),2) sla
+FROM call_entry a JOIN queue_call_entry b ON a.id_queue_call_entry=b.id
+JOIN asterisk.queues_details d ON b.queue=d.id AND d.keyword='servicelevel'
+WHERE a.datetime_end IS NOT NULL AND a.id_queue_call_entry<>7
+  AND a.datetime_end>=@inicio AND a.datetime_end<@fim;";
+        await using var cmd = new MySqlCommand(sql, conn);
+        AddWindow(cmd, inicio, fim);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+
+        var row = await r.ReadAsync(ct)
+            ? new ReportSummaryRow(ToInt(r["total"]), ToInt(r["atendidas"]), ToInt(r["perdas"]),
+                ToInt(r["tma"]), ToInt(r["tme"]), ToDouble(r["sla"]))
+            : new ReportSummaryRow(0, 0, 0, 0, 0, 0);
+
+        double pctPerdas = row.Total > 0 ? Math.Round(100.0 * row.Perdas / row.Total, 2) : 0;
+        double pctAtendidas = row.Total > 0 ? Math.Round(100.0 * row.Atendidas / row.Total, 2) : 0;
+
+        return new ReportSummary(
+            Total: row.Total, Atendidas: row.Atendidas, Perdas: row.Perdas,
+            PercentPerdas: pctPerdas, PercentAtendidas: pctAtendidas,
+            SlaPercent: row.Sla, TmaSeconds: row.Tma, TmeSeconds: row.Tme);
+    }
+
+    /// Por atendente (todos os tipos, sem filtro de type), ordenado por atendidas desc.
+    /// Percent em C# = atendidas / (soma das atendidas de todos os agentes) * 100 (2 casas).
+    private static async Task<List<ReportAgentRow>> GetReportByAgentAsync(
+        MySqlConnection conn, DateTime inicio, DateTime fim, CancellationToken ct)
+    {
+        const string sql = @"
+SELECT ag.id, ag.name, COUNT(a.id) atendidas
+FROM agent ag JOIN call_entry a ON ag.id=a.id_agent AND a.datetime_end IS NOT NULL
+  AND a.id_queue_call_entry<>7 AND a.datetime_end>=@inicio AND a.datetime_end<@fim
+GROUP BY ag.id, ag.name HAVING atendidas>0 ORDER BY atendidas DESC;";
+        var raw = new List<(string Id, string Name, int Atendidas)>();
+        await using var cmd = new MySqlCommand(sql, conn);
+        AddWindow(cmd, inicio, fim);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct))
+            raw.Add((r.GetInt32("id").ToString(), r.GetString("name"), ToInt(r["atendidas"])));
+
+        int soma = raw.Sum(x => x.Atendidas);
+        return raw
+            .Select(x => new ReportAgentRow(
+                x.Id, x.Name, x.Atendidas,
+                soma > 0 ? Math.Round(100.0 * x.Atendidas / soma, 2) : 0))
+            .ToList();
+    }
+
+    /// Por fila/convênio, ordenado por quantidade desc.
+    /// Percent em C# = quantidade / total do período * 100 (2 casas).
+    private static async Task<List<ReportQueueRow>> GetReportByQueueAsync(
+        MySqlConnection conn, DateTime inicio, DateTime fim, CancellationToken ct)
+    {
+        const string sql = @"
+SELECT b.queue, c.descr, COUNT(*) quantidade
+FROM call_entry a JOIN queue_call_entry b ON a.id_queue_call_entry=b.id
+JOIN asterisk.queues_config c ON b.queue=c.extension
+WHERE a.datetime_end IS NOT NULL AND a.id_queue_call_entry<>7
+  AND a.datetime_end>=@inicio AND a.datetime_end<@fim
+GROUP BY b.queue, c.descr ORDER BY quantidade DESC;";
+        var raw = new List<(string Queue, string Descr, int Quantidade)>();
+        await using var cmd = new MySqlCommand(sql, conn);
+        AddWindow(cmd, inicio, fim);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct))
+            raw.Add((r.GetString("queue"), r.GetString("descr"), ToInt(r["quantidade"])));
+
+        int total = raw.Sum(x => x.Quantidade);
+        return raw
+            .Select(x => new ReportQueueRow(
+                x.Queue, x.Descr, x.Quantidade,
+                total > 0 ? Math.Round(100.0 * x.Quantidade / total, 2) : 0))
+            .ToList();
+    }
+
+    private static void AddWindow(MySqlCommand cmd, DateTime inicio, DateTime fim)
+    {
+        cmd.Parameters.Add(new MySqlParameter("@inicio", inicio));
+        cmd.Parameters.Add(new MySqlParameter("@fim", fim));
+    }
+
     // ---- Queries individuais -------------------------------------------------
 
     /// Q_queues — todas as filas configuradas.

@@ -1,11 +1,16 @@
 using System.Net.WebSockets;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DashCall.Collector.Sources;
 using DashCall.Contracts;
 
 namespace DashCall.Collector.Net;
 
-/// Mantém uma conexão WebSocket de SAÍDA com o hub e envia snapshots.
+/// Mantém uma conexão WebSocket de SAÍDA com o hub, agora FULL-DUPLEX:
+///  - ENVIO: consome o stream de snapshots e os envia (envelope Type=snapshot).
+///  - RECEPÇÃO: escuta pedidos de relatório (Type=reportRequest), monta via IReportSource
+///    e responde (Type=reportResponse) com o MESMO CorrelationId.
 /// Reconecta sozinho (ReconnectPolicy). Nunca abre porta de entrada na VPS.
 public sealed class HubConnection
 {
@@ -23,31 +28,115 @@ public sealed class HubConnection
         _token = token;
     }
 
-    /// Consome a fonte e envia cada snapshot; em falha, reconecta e retoma.
-    public async Task RunAsync(IAsyncEnumerable<LiveSnapshot> stream, CancellationToken ct)
+    /// Consome a fonte e mantém o canal bidirecional; em falha, reconecta e retoma.
+    public async Task RunAsync(
+        IAsyncEnumerable<LiveSnapshot> stream, IReportSource reports, CancellationToken ct)
     {
         var attempt = 0;
         while (!ct.IsCancellationRequested)
         {
             using var ws = new ClientWebSocket();
             ws.Options.SetRequestHeader("Authorization", $"Bearer {_token}");
+
+            // Serializa TODOS os sends: o WebSocket não permite dois SendAsync concorrentes.
+            using var sendLock = new SemaphoreSlim(1, 1);
+            // Encerra ambas as tarefas quando qualquer uma delas terminar (conexão caiu).
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
             try
             {
                 await ws.ConnectAsync(_hubUri, ct);
                 attempt = 0;
-                await foreach (var snap in stream.WithCancellation(ct))
-                {
-                    var bytes = JsonSerializer.SerializeToUtf8Bytes(snap, Json);
-                    await ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
-                }
+
+                var send = PumpSnapshotsAsync(ws, stream, sendLock, linked.Token);
+                var recv = PumpRequestsAsync(ws, reports, sendLock, linked.Token);
+
+                // Ao terminar a primeira tarefa, cancela a outra e aguarda ambas.
+                await Task.WhenAny(send, recv);
+                linked.Cancel();
+                try { await Task.WhenAll(send, recv); } catch { /* propaga abaixo se for erro real */ }
             }
-            catch (OperationCanceledException) { break; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"[collector] conexão caiu: {ex.Message}");
-                var delay = ReconnectPolicy.DelayFor(attempt++);
-                try { await Task.Delay(delay, ct); } catch { break; }
             }
+
+            if (ct.IsCancellationRequested) break;
+            var delay = ReconnectPolicy.DelayFor(attempt++);
+            try { await Task.Delay(delay, ct); } catch { break; }
         }
+    }
+
+    /// ENVIO: cada snapshot vira um envelope Type=snapshot.
+    private static async Task PumpSnapshotsAsync(
+        ClientWebSocket ws, IAsyncEnumerable<LiveSnapshot> stream,
+        SemaphoreSlim sendLock, CancellationToken ct)
+    {
+        await foreach (var snap in stream.WithCancellation(ct))
+        {
+            var env = new CollectorEnvelope("snapshot", Snapshot: snap);
+            await SendAsync(ws, env, sendLock, ct);
+        }
+    }
+
+    /// RECEPÇÃO: pedidos de relatório -> monta -> responde (mesmo CorrelationId).
+    private static async Task PumpRequestsAsync(
+        ClientWebSocket ws, IReportSource reports,
+        SemaphoreSlim sendLock, CancellationToken ct)
+    {
+        var buffer = new byte[64 * 1024];
+        while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
+        {
+            var msg = await ReceiveFullAsync(ws, buffer, ct);
+            if (msg is null) break; // Close recebido
+
+            CollectorEnvelope? env;
+            try { env = JsonSerializer.Deserialize<CollectorEnvelope>(msg, Json); }
+            catch { continue; } // mensagem malformada é ignorada
+
+            if (env is null || env.Type != "reportRequest" || env.ReportRequest is null) continue;
+
+            var req = env.ReportRequest;
+            ReportResult result;
+            try
+            {
+                var data = await reports.BuildReportAsync(
+                    req.Inicio.UtcDateTime, req.Fim.UtcDateTime, ct);
+                result = new ReportResult(req.CorrelationId, data, null);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (Exception ex)
+            {
+                result = new ReportResult(req.CorrelationId, null, ex.Message);
+            }
+
+            var response = new CollectorEnvelope("reportResponse", ReportResponse: result);
+            await SendAsync(ws, response, sendLock, ct);
+        }
+    }
+
+    private static async Task SendAsync(
+        ClientWebSocket ws, CollectorEnvelope env, SemaphoreSlim sendLock, CancellationToken ct)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(env, Json);
+        await sendLock.WaitAsync(ct);
+        try { await ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct); }
+        finally { sendLock.Release(); }
+    }
+
+    /// Lê uma mensagem completa (pode vir fragmentada). Retorna null no Close.
+    private static async Task<string?> ReceiveFullAsync(
+        ClientWebSocket ws, byte[] buffer, CancellationToken ct)
+    {
+        using var ms = new MemoryStream();
+        while (true)
+        {
+            var result = await ws.ReceiveAsync(buffer, ct);
+            if (result.MessageType == WebSocketMessageType.Close) return null;
+            ms.Write(buffer, 0, result.Count);
+            if (result.EndOfMessage) break;
+        }
+        return Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
     }
 }

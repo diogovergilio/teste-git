@@ -10,7 +10,7 @@ namespace DashCall.Collector.Sources;
 ///
 /// Resiliência: se uma rodada falhar (erro de query/conexão), loga em Console.Error e CONTINUA —
 /// reemite o último snapshot bom se houver, ou pula a rodada. Nunca derruba o stream.
-public sealed class MariaDbCallCenterSource : ICallCenterSource
+public sealed class MariaDbCallCenterSource : ICallCenterSource, IReportSource
 {
     private readonly CallCenterDb _db;
     private readonly string _tenantId;
@@ -54,4 +54,8 @@ public sealed class MariaDbCallCenterSource : ICallCenterSource
             catch (TaskCanceledException) { yield break; }
         }
     }
+
+    /// Relatório sob demanda: delega ao CallCenterDb (mesmas queries de paridade do Grafana).
+    public Task<ReportData> BuildReportAsync(DateTime inicio, DateTime fim, CancellationToken ct)
+        => _db.BuildReportAsync(inicio, fim, ct);
 }
