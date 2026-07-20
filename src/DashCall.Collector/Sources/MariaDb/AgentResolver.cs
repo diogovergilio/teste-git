@@ -19,6 +19,15 @@ public static class AgentResolver
 {
     /// Nome do atendente por trás do canal, ou null quando não há candidato.
     public static string? Resolver(string canal, IReadOnlyList<AgentRow> agentes)
+        => ResolverLinha(canal, agentes)?.Name;
+
+    /// Id do cadastro por trás do canal. O painel individual compara por id — comparar por
+    /// string traria de volta a ambiguidade do ramal reciclado.
+    public static int? ResolverId(string canal, IReadOnlyList<AgentRow> agentes)
+        => ResolverLinha(canal, agentes)?.Id;
+
+    /// Escolhe UMA linha do cadastro para o canal. Toda a regra de desempate mora aqui.
+    private static AgentRow? ResolverLinha(string canal, IReadOnlyList<AgentRow> agentes)
     {
         if (string.IsNullOrWhiteSpace(canal)) return null;
 
@@ -46,7 +55,6 @@ public static class AgentResolver
         return candidatos
             .OrderByDescending(a => a.Estatus == "A")
             .ThenByDescending(a => a.Id)
-            .FirstOrDefault()
-            ?.Name;
+            .FirstOrDefault();
     }
 }

@@ -10,10 +10,11 @@ namespace DashCall.Collector.Sources;
 ///
 /// Resiliência: se uma rodada falhar (erro de query/conexão), loga em Console.Error e CONTINUA —
 /// reemite o último snapshot bom se houver, ou pula a rodada. Nunca derruba o stream.
-public sealed class MariaDbCallCenterSource : ICallCenterSource, IReportSource
+public sealed class MariaDbCallCenterSource : ICallCenterSource, IReportSource, IAgentSource
 {
     private readonly CallCenterDb _db;
     private readonly AnalysisDb _analysis;
+    private readonly AgentDb _agents;
     private readonly string _tenantId;
     private readonly int _intervalMs;
 
@@ -21,9 +22,18 @@ public sealed class MariaDbCallCenterSource : ICallCenterSource, IReportSource
     {
         _db = new CallCenterDb(connectionString);
         _analysis = new AnalysisDb(connectionString);
+        _agents = new AgentDb(connectionString);
         _tenantId = tenantId;
         _intervalMs = intervalMs;
     }
+
+    // ---- Módulo 3: painel do agente ----------------------------------------
+
+    public async Task<IReadOnlyList<AgentSummary>> ListarAgentesAsync(CancellationToken ct)
+        => await _agents.ListarAgentesAsync(ct);
+
+    public Task<AgentDetail?> BuildAgentDetailAsync(int agentId, CancellationToken ct)
+        => _agents.BuildDetailAsync(agentId, ct);
 
     public async IAsyncEnumerable<LiveSnapshot> StreamAsync(
         [EnumeratorCancellation] CancellationToken ct)

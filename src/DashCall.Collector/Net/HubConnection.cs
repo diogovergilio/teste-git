@@ -95,24 +95,62 @@ public sealed class HubConnection
             try { env = JsonSerializer.Deserialize<CollectorEnvelope>(msg, Json); }
             catch { continue; } // mensagem malformada é ignorada
 
-            if (env is null || env.Type != "reportRequest" || env.ReportRequest is null) continue;
+            if (env is null) continue;
 
-            var req = env.ReportRequest;
-            ReportResult result;
-            try
+            // Relatório sob demanda (Módulo 2).
+            if (env.Type == "reportRequest" && env.ReportRequest is not null)
             {
-                var data = await reports.BuildReportAsync(
-                    req.Inicio.UtcDateTime, req.Fim.UtcDateTime, ct);
-                result = new ReportResult(req.CorrelationId, data, null);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
-            catch (Exception ex)
-            {
-                result = new ReportResult(req.CorrelationId, null, ex.Message);
+                var req = env.ReportRequest;
+                ReportResult result;
+                try
+                {
+                    var data = await reports.BuildReportAsync(
+                        req.Inicio.UtcDateTime, req.Fim.UtcDateTime, ct);
+                    result = new ReportResult(req.CorrelationId, data, null);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                catch (Exception ex)
+                {
+                    result = new ReportResult(req.CorrelationId, null, ex.Message);
+                }
+
+                await SendAsync(ws, new CollectorEnvelope("reportResponse", ReportResponse: result),
+                    sendLock, ct);
+                continue;
             }
 
-            var response = new CollectorEnvelope("reportResponse", ReportResponse: result);
-            await SendAsync(ws, response, sendLock, ct);
+            // Painel do agente (Módulo 3). Só responde se a fonte souber — assim um coletor
+            // apontado para a fonte fake não finge ter o módulo.
+            if (env.Type == "agentRequest" && env.AgentRequest is not null && reports is IAgentSource agentes)
+            {
+                var req = env.AgentRequest;
+                AgentResult result;
+                try
+                {
+                    if (req.AgentId is null)
+                    {
+                        var lista = await agentes.ListarAgentesAsync(ct);
+                        result = new AgentResult(req.CorrelationId, Agents: lista);
+                    }
+                    else
+                    {
+                        var detalhe = await agentes.BuildAgentDetailAsync(req.AgentId.Value, ct);
+                        result = detalhe is null
+                            // Vínculo órfão: o agente saiu do cadastro do PABX. Código próprio
+                            // para a tela poder dizer isso, em vez de "erro ao carregar".
+                            ? new AgentResult(req.CorrelationId, Error: AgentErrors.AgenteRemovido)
+                            : new AgentResult(req.CorrelationId, Detail: detalhe);
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                catch (Exception ex)
+                {
+                    result = new AgentResult(req.CorrelationId, Error: ex.Message);
+                }
+
+                await SendAsync(ws, new CollectorEnvelope("agentResponse", AgentResponse: result),
+                    sendLock, ct);
+            }
         }
     }
 
