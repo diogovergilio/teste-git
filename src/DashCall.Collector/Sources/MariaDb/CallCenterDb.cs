@@ -308,6 +308,7 @@ JOIN queue_call_entry b ON a.id_queue_call_entry=b.id GROUP BY b.id;";
     {
         const string sql = @"
 SELECT ag.id, ag.name, MAX(br.id IS NOT NULL) on_break, MAX(brk.name) break_name,
+  IFNULL(MAX(TIMESTAMPDIFF(SECOND,br.datetime_init,NOW())),0) break_seconds,
   MAX(cce.id_agent IS NOT NULL) on_call, IFNULL(MAX(TIMESTAMPDIFF(SECOND,cce.datetime_init,NOW())),0) call_seconds
 FROM audit login JOIN agent ag ON login.id_agent=ag.id
 LEFT JOIN audit br ON br.id_agent=ag.id AND br.datetime_end IS NULL AND br.id_break IS NOT NULL
@@ -328,7 +329,10 @@ GROUP BY ag.id, ag.name;";
                 Name: r.GetString("name"),
                 State: state,
                 CurrentCallSeconds: ToInt(r["call_seconds"]),
-                QueueIds: Array.Empty<string>()));
+                QueueIds: Array.Empty<string>(),
+                // Motivo e duração da pausa só fazem sentido quando ela está em curso.
+                BreakName: onBreak && r["break_name"] != DBNull.Value ? r.GetString("break_name") : null,
+                BreakSeconds: onBreak ? ToInt(r["break_seconds"]) : 0));
         }
         return agents;
     }

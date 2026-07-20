@@ -46,9 +46,15 @@ public record QueueToday(
 
 public enum AgentState { Offline, Available, OnCall, Paused }
 
+/// <param name="CurrentCallSeconds">Duração da ligação em curso (0 quando não está falando).</param>
+/// <param name="BreakName">Motivo da pausa (ex.: "Almoço"); null fora de pausa.</param>
+/// <param name="BreakSeconds">Há quanto tempo está em pausa. Opcionais no fim do record para
+/// manter compatibilidade: um hub novo continua lendo snapshot de coletor antigo.</param>
 public record AgentLive(
     string Id,
     string Name,
     AgentState State,
     int CurrentCallSeconds,
-    IReadOnlyList<string> QueueIds);
+    IReadOnlyList<string> QueueIds,
+    string? BreakName = null,
+    int BreakSeconds = 0);
