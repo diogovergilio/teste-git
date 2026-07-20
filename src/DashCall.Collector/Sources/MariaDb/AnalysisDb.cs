@@ -49,7 +49,7 @@ public sealed class AnalysisDb
 SELECT DAYOFWEEK(a.datetime_entry_queue) dow, HOUR(a.datetime_entry_queue) h,
   COUNT(*) total, SUM(a.status='abandonada') abandonadas
 FROM call_entry a
-WHERE a.datetime_end IS NOT NULL AND a.id_queue_call_entry<>7
+WHERE a.datetime_end IS NOT NULL
   AND a.datetime_end>=@inicio AND a.datetime_end<@fim
   AND a.datetime_entry_queue IS NOT NULL
 GROUP BY dow, h;";
@@ -78,7 +78,7 @@ SELECT CASE
     ELSE '>120s' END faixa,
   COUNT(*) quantidade
 FROM call_entry a
-WHERE a.datetime_end IS NOT NULL AND a.id_queue_call_entry<>7 AND a.status='abandonada'
+WHERE a.datetime_end IS NOT NULL AND a.status='abandonada'
   AND a.datetime_end>=@inicio AND a.datetime_end<@fim
 GROUP BY faixa;";
         var raw = new Dictionary<string, int>();
@@ -110,7 +110,7 @@ GROUP BY faixa;";
         const string sql = @"
 SELECT a.callerid, a.datetime_entry_queue, a.status
 FROM call_entry a
-WHERE a.datetime_end IS NOT NULL AND a.id_queue_call_entry<>7
+WHERE a.datetime_end IS NOT NULL
   AND a.datetime_end>=@inicio AND a.datetime_end<@fim
   AND a.datetime_entry_queue IS NOT NULL
 ORDER BY a.callerid, a.datetime_entry_queue;";

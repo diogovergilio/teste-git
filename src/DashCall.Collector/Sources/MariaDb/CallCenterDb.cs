@@ -12,7 +12,11 @@ namespace DashCall.Collector.Sources.MariaDb;
 ///  - TMA = SUM(duration)/COUNT(id)  (divide pelo TOTAL — duration é NULL em abandonada e o SUM ignora NULL).
 ///  - TME = SUM(duration_wait)/COUNT(id). Ambos arredondados para segundos inteiros.
 ///  - NS% = 100 * SUM(duration_wait <= servicelevel) / COUNT(*) sobre as linhas ended.
-///  - Sempre filtrar id_queue_call_entry <> 7 (mantém paridade com o Grafana).
+///  - TODAS as filas entram. O filtro `id_queue_call_entry <> 7` herdado do dashboard Grafana foi
+///    removido: no VS2IP a fila 7 nem existe (queue_call_entry tem ids 1,2,3), então ele nunca
+///    excluiu nada — e num cliente onde o id 7 fosse uma fila real, apagaria essa fila de todos os
+///    números, em silêncio. Escolher quais filas aparecem é decisão do cliente, não da query;
+///    está previsto como seleção de filas por tenant.
 ///  - TMO (Tempo Médio Operacional) = TMA + TME (definição do cliente).
 ///
 /// Parametrização da data: quando <c>since</c> é null, usa-se o literal CURDATE() na SQL
@@ -117,7 +121,7 @@ SELECT COUNT(*) total, SUM(a.status='terminada') atendidas,
   ROUND(100*SUM(a.duration_wait<=d.data)/COUNT(*),2) sla
 FROM call_entry a JOIN queue_call_entry b ON a.id_queue_call_entry=b.id
 JOIN asterisk.queues_details d ON b.queue=d.id AND d.keyword='servicelevel'
-WHERE a.datetime_end IS NOT NULL AND a.id_queue_call_entry<>7
+WHERE a.datetime_end IS NOT NULL
   AND a.datetime_end>=@inicio AND a.datetime_end<@fim;";
         await using var cmd = new MySqlCommand(sql, conn);
         AddWindow(cmd, inicio, fim);
@@ -145,7 +149,7 @@ WHERE a.datetime_end IS NOT NULL AND a.id_queue_call_entry<>7
         const string sql = @"
 SELECT ag.id, ag.name, COUNT(a.id) atendidas
 FROM agent ag JOIN call_entry a ON ag.id=a.id_agent AND a.datetime_end IS NOT NULL
-  AND a.id_queue_call_entry<>7 AND a.datetime_end>=@inicio AND a.datetime_end<@fim
+  AND a.datetime_end>=@inicio AND a.datetime_end<@fim
 GROUP BY ag.id, ag.name HAVING atendidas>0 ORDER BY atendidas DESC;";
         var raw = new List<(string Id, string Name, int Atendidas)>();
         await using var cmd = new MySqlCommand(sql, conn);
@@ -171,7 +175,7 @@ GROUP BY ag.id, ag.name HAVING atendidas>0 ORDER BY atendidas DESC;";
 SELECT b.queue, c.descr, COUNT(*) quantidade
 FROM call_entry a JOIN queue_call_entry b ON a.id_queue_call_entry=b.id
 JOIN asterisk.queues_config c ON b.queue=c.extension
-WHERE a.datetime_end IS NOT NULL AND a.id_queue_call_entry<>7
+WHERE a.datetime_end IS NOT NULL
   AND a.datetime_end>=@inicio AND a.datetime_end<@fim
 GROUP BY b.queue, c.descr ORDER BY quantidade DESC;";
         var raw = new List<(string Queue, string Descr, int Quantidade)>();
@@ -202,8 +206,7 @@ GROUP BY b.queue, c.descr ORDER BY quantidade DESC;";
     {
         const string sql = @"
 SELECT b.id AS qce_id, b.queue AS ext, c.descr AS name
-FROM queue_call_entry b JOIN asterisk.queues_config c ON b.queue=c.extension
-WHERE b.id<>7;";
+FROM queue_call_entry b JOIN asterisk.queues_config c ON b.queue=c.extension;";
         var rows = new List<QueueRow>();
         await using var cmd = new MySqlCommand(sql, conn);
         await using var r = await cmd.ExecuteReaderAsync(ct);
@@ -223,7 +226,7 @@ SELECT b.id AS qce_id, COUNT(*) offered, SUM(a.status='terminada') answered,
   ROUND(100*SUM(a.duration_wait<=d.data)/COUNT(*),2) sla
 FROM call_entry a JOIN queue_call_entry b ON a.id_queue_call_entry=b.id
 JOIN asterisk.queues_details d ON b.queue=d.id AND d.keyword='servicelevel'
-WHERE a.datetime_end IS NOT NULL AND a.id_queue_call_entry<>7 AND a.datetime_end>={SincePredicate(since)}
+WHERE a.datetime_end IS NOT NULL AND a.datetime_end>={SincePredicate(since)}
 GROUP BY b.id;";
         var map = new Dictionary<int, TodayRow>();
         await using var cmd = new MySqlCommand(sql, conn);
@@ -251,7 +254,7 @@ SELECT COUNT(*) offered, SUM(a.status='terminada') answered,
   ROUND(100*SUM(a.duration_wait<=d.data)/COUNT(*),2) sla
 FROM call_entry a JOIN queue_call_entry b ON a.id_queue_call_entry=b.id
 JOIN asterisk.queues_details d ON b.queue=d.id AND d.keyword='servicelevel'
-WHERE a.datetime_end IS NOT NULL AND a.id_queue_call_entry<>7 AND a.datetime_end>={SincePredicate(since)};";
+WHERE a.datetime_end IS NOT NULL AND a.datetime_end>={SincePredicate(since)};";
         await using var cmd = new MySqlCommand(sql, conn);
         AddSince(cmd, since);
         await using var r = await cmd.ExecuteReaderAsync(ct);
@@ -274,7 +277,7 @@ WHERE a.datetime_end IS NOT NULL AND a.id_queue_call_entry<>7 AND a.datetime_end
         const string sql = @"
 SELECT b.id qce_id, COUNT(*) waiting, IFNULL(MAX(TIMESTAMPDIFF(SECOND,a.datetime_entry_queue,NOW())),0) longest
 FROM call_entry a JOIN queue_call_entry b ON a.id_queue_call_entry=b.id
-WHERE a.status IN ('en_cola','en-cola') AND a.id_agent IS NULL AND a.id_queue_call_entry<>7
+WHERE a.status IN ('en_cola','en-cola') AND a.id_agent IS NULL
 GROUP BY b.id;";
         var map = new Dictionary<int, WaitingRow>();
         await using var cmd = new MySqlCommand(sql, conn);
@@ -290,7 +293,7 @@ GROUP BY b.id;";
     {
         const string sql = @"
 SELECT b.id qce_id, COUNT(*) inprog FROM current_call_entry a
-JOIN queue_call_entry b ON a.id_queue_call_entry=b.id WHERE a.id_queue_call_entry<>7 GROUP BY b.id;";
+JOIN queue_call_entry b ON a.id_queue_call_entry=b.id GROUP BY b.id;";
         var map = new Dictionary<int, int>();
         await using var cmd = new MySqlCommand(sql, conn);
         await using var r = await cmd.ExecuteReaderAsync(ct);
@@ -338,7 +341,7 @@ GROUP BY ag.id, ag.name;";
         string sql = $@"
 SELECT ag.id, ag.name, COUNT(a.id) answered, ROUND(IFNULL(SUM(a.duration)/COUNT(a.id),0)) tma
 FROM agent ag LEFT JOIN call_entry a ON ag.id=a.id_agent AND a.datetime_end IS NOT NULL
-  AND a.id_queue_call_entry<>7 AND a.datetime_end>={SincePredicate(since)}
+  AND a.datetime_end>={SincePredicate(since)}
 GROUP BY ag.id, ag.name HAVING answered>0 ORDER BY answered DESC LIMIT 20;";
         var ranking = new List<AgentRank>();
         await using var cmd = new MySqlCommand(sql, conn);
