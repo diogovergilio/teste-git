@@ -13,6 +13,11 @@ services:
     restart: unless-stopped
     network_mode: host
     env_file: .env
+    # Gravações (Módulo 6): o coletor LÊ os .wav do host. Read-only, coerente com o resto —
+    # o coletor nunca escreve no cliente. Ajuste a origem se o Issabel gravar em outro caminho.
+    # Sem este volume, o download de gravação falha com "arquivo não encontrado".
+    volumes:
+      - /var/spool/asterisk/monitor:/var/spool/asterisk/monitor:ro
     # A imagem e construida em OUTRA maquina (dev/CI) e carregada na VPS via `docker load`
     # (a VPS nao baixa o SDK .NET ~1GB — so a imagem de runtime ~200MB). Fluxo:
     #   dev:  docker build -t dashcall-collector:latest . && docker save dashcall-collector:latest | gzip > col.tar.gz

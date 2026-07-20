@@ -6,11 +6,16 @@ namespace DashCall.Contracts;
 public record CollectorEnvelope(
     string Type,                            // "snapshot" | "reportRequest" | "reportResponse"
                                             // | "agentRequest" | "agentResponse"
+                                            // | "recordingList*" | "recordingDownload*"
     LiveSnapshot? Snapshot = null,          // coletor->hub
     ReportRequest? ReportRequest = null,    // hub->coletor
     ReportResult? ReportResponse = null,    // coletor->hub
     AgentRequest? AgentRequest = null,      // hub->coletor
-    AgentResult? AgentResponse = null);     // coletor->hub
+    AgentResult? AgentResponse = null,      // coletor->hub
+    RecordingListRequest? RecordingListRequest = null,        // hub->coletor
+    RecordingListResult? RecordingListResponse = null,        // coletor->hub
+    RecordingDownloadRequest? RecordingDownloadRequest = null, // hub->coletor
+    RecordingDownloadResult? RecordingDownloadResponse = null); // coletor->hub
 
 /// Pedido de relatório sob demanda (hub->coletor). CorrelationId casa a resposta.
 public record ReportRequest(string CorrelationId, DateTimeOffset Inicio, DateTimeOffset Fim);

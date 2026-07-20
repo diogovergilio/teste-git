@@ -11,10 +11,13 @@ var tenantId = cfg["Tenant:Id"]!;
 var hubUri = new Uri(cfg["Hub:Url"]!);
 var token = cfg["Hub:Token"]!;
 
+// Pasta das gravações na VPS (Módulo 6). Default = padrão do Issabel/Asterisk.
+var recordingsDir = cfg["Recordings:Dir"] ?? "/var/spool/asterisk/monitor";
+
 ICallCenterSource source = cfg["Source"] switch
 {
     // Poller read-only do MariaDB (sem AMI). ConnString vem do appsettings/env/secret.
-    "mariadb" => new MariaDbCallCenterSource(cfg["Db:ConnString"]!, tenantId, 2000),
+    "mariadb" => new MariaDbCallCenterSource(cfg["Db:ConnString"]!, tenantId, recordingsDir, 2000),
     _ => new FakeCallCenterSource(tenantId, intervalMs: 1000)
 };
 

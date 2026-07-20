@@ -10,19 +10,22 @@ namespace DashCall.Collector.Sources;
 ///
 /// Resiliência: se uma rodada falhar (erro de query/conexão), loga em Console.Error e CONTINUA —
 /// reemite o último snapshot bom se houver, ou pula a rodada. Nunca derruba o stream.
-public sealed class MariaDbCallCenterSource : ICallCenterSource, IReportSource, IAgentSource
+public sealed class MariaDbCallCenterSource : ICallCenterSource, IReportSource, IAgentSource, IRecordingSource
 {
     private readonly CallCenterDb _db;
     private readonly AnalysisDb _analysis;
     private readonly AgentDb _agents;
+    private readonly RecordingDb _recordings;
     private readonly string _tenantId;
     private readonly int _intervalMs;
 
-    public MariaDbCallCenterSource(string connectionString, string tenantId, int intervalMs = 2000)
+    public MariaDbCallCenterSource(
+        string connectionString, string tenantId, string recordingsDir, int intervalMs = 2000)
     {
         _db = new CallCenterDb(connectionString);
         _analysis = new AnalysisDb(connectionString);
         _agents = new AgentDb(connectionString);
+        _recordings = new RecordingDb(connectionString, recordingsDir);
         _tenantId = tenantId;
         _intervalMs = intervalMs;
     }
@@ -34,6 +37,18 @@ public sealed class MariaDbCallCenterSource : ICallCenterSource, IReportSource, 
 
     public Task<AgentDetail?> BuildAgentDetailAsync(int agentId, CancellationToken ct)
         => _agents.BuildDetailAsync(agentId, ct);
+
+    // ---- Módulo 6: gravações -----------------------------------------------
+
+    public Task<(IReadOnlyList<RecordingRow> Rows, int Total)> ListarGravacoesAsync(
+        RecordingListRequest r, CancellationToken ct)
+        => _recordings.ListarAsync(
+            r.Inicio.UtcDateTime, r.Fim.UtcDateTime, r.Fila, r.AgentId, r.Callerid,
+            r.Pagina, r.PorPagina, ct);
+
+    public Task<RecordingDownloadResult> BaixarGravacaoAsync(
+        RecordingDownloadRequest r, CancellationToken ct)
+        => _recordings.BaixarAsync(r.CorrelationId, r.Id, ct);
 
     public async IAsyncEnumerable<LiveSnapshot> StreamAsync(
         [EnumeratorCancellation] CancellationToken ct)

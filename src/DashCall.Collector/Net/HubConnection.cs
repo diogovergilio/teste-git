@@ -150,6 +150,49 @@ public sealed class HubConnection
 
                 await SendAsync(ws, new CollectorEnvelope("agentResponse", AgentResponse: result),
                     sendLock, ct);
+                continue;
+            }
+
+            // Gravações — listagem (Módulo 6).
+            if (env.Type == "recordingListRequest" && env.RecordingListRequest is not null
+                && reports is IRecordingSource recSrc)
+            {
+                var req = env.RecordingListRequest;
+                RecordingListResult result;
+                try
+                {
+                    var (rows, total) = await recSrc.ListarGravacoesAsync(req, ct);
+                    result = new RecordingListResult(req.CorrelationId, rows, total);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                catch (Exception ex)
+                {
+                    result = new RecordingListResult(req.CorrelationId, Error: ex.Message);
+                }
+
+                await SendAsync(ws, new CollectorEnvelope("recordingListResponse",
+                    RecordingListResponse: result), sendLock, ct);
+                continue;
+            }
+
+            // Gravações — download do binário (Módulo 6).
+            if (env.Type == "recordingDownloadRequest" && env.RecordingDownloadRequest is not null
+                && reports is IRecordingSource recDl)
+            {
+                var req = env.RecordingDownloadRequest;
+                RecordingDownloadResult result;
+                try
+                {
+                    result = await recDl.BaixarGravacaoAsync(req, ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                catch (Exception ex)
+                {
+                    result = new RecordingDownloadResult(req.CorrelationId, Erro: ex.Message);
+                }
+
+                await SendAsync(ws, new CollectorEnvelope("recordingDownloadResponse",
+                    RecordingDownloadResponse: result), sendLock, ct);
             }
         }
     }
