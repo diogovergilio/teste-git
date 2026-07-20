@@ -13,12 +13,14 @@ namespace DashCall.Collector.Sources;
 public sealed class MariaDbCallCenterSource : ICallCenterSource, IReportSource
 {
     private readonly CallCenterDb _db;
+    private readonly AnalysisDb _analysis;
     private readonly string _tenantId;
     private readonly int _intervalMs;
 
     public MariaDbCallCenterSource(string connectionString, string tenantId, int intervalMs = 2000)
     {
         _db = new CallCenterDb(connectionString);
+        _analysis = new AnalysisDb(connectionString);
         _tenantId = tenantId;
         _intervalMs = intervalMs;
     }
@@ -55,7 +57,25 @@ public sealed class MariaDbCallCenterSource : ICallCenterSource, IReportSource
         }
     }
 
-    /// Relatório sob demanda: delega ao CallCenterDb (mesmas queries de paridade do Grafana).
-    public Task<ReportData> BuildReportAsync(DateTime inicio, DateTime fim, CancellationToken ct)
-        => _db.BuildReportAsync(inicio, fim, ct);
+    /// Relatório sob demanda: folha 1 no CallCenterDb (queries de paridade com o Grafana) e
+    /// folha 2 no AnalysisDb (blocos analíticos).
+    ///
+    /// A folha 2 é ADITIVA: se as queries analíticas falharem, o relatório sai sem ela em vez de
+    /// falhar inteiro — a folha 1 é o que a diretoria precisa e não pode ficar refém do extra.
+    public async Task<ReportData> BuildReportAsync(DateTime inicio, DateTime fim, CancellationToken ct)
+    {
+        var data = await _db.BuildReportAsync(inicio, fim, ct);
+
+        try
+        {
+            var analysis = await _analysis.BuildAnalysisAsync(inicio, fim, ct);
+            return data with { Analysis = analysis };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await Console.Error.WriteLineAsync(
+                $"[mariadb] folha de analise indisponivel: {ex.Message}");
+            return data;
+        }
+    }
 }

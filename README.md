@@ -11,6 +11,21 @@ Sem segredos no código — toda a configuração vem por variáveis de ambiente
 
 Pré-requisitos na VPS: **Docker** e um usuário de banco **somente leitura**.
 
+### Permissões do usuário read-only
+
+```sql
+GRANT SELECT ON call_center.*           TO 'dashcall_ro'@'localhost';
+GRANT SELECT ON asterisk.queues_config  TO 'dashcall_ro'@'localhost';
+GRANT SELECT ON asterisk.queues_details TO 'dashcall_ro'@'localhost';
+-- Opcional: pesquisa de satisfação (banco separado). Sem este GRANT, o relatório
+-- continua saindo — apenas sem o bloco de satisfação.
+GRANT SELECT ON pesquisa.*              TO 'dashcall_ro'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+> `localhost` e `127.0.0.1` são hosts DIFERENTES para o MySQL (socket vs TCP). O coletor conecta por
+> TCP — teste do mesmo jeito que ele: `mysql -h 127.0.0.1 -P 3306 -u dashcall_ro -p`.
+
 A imagem é construída em outra máquina (dev/CI) e a VPS só carrega a imagem de runtime
 (~200 MB) — economiza ~1 GB (o SDK .NET nunca é baixado na VPS).
 
