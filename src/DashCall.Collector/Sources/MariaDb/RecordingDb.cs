@@ -120,11 +120,12 @@ LEFT JOIN agent ag ON ag.id=ce.id_agent
         if (string.IsNullOrWhiteSpace(recordingFile))
             return new RecordingDownloadResult(correlationId, Erro: RecordingErrors.Expirada);
 
-        var caminho = RecordingPath.ResolverSeguro(_baseDir, recordingFile);
-        if (caminho is null)
+        var caminhoBanco = RecordingPath.ResolverSeguro(_baseDir, recordingFile);
+        if (caminhoBanco is null)
             return new RecordingDownloadResult(correlationId, Erro: RecordingErrors.CaminhoInvalido);
 
-        if (!File.Exists(caminho))
+        var caminho = EncontrarArquivoReal(caminhoBanco);
+        if (caminho is null)
             // Registro existe, arquivo não — expirou entre listar e clicar.
             return new RecordingDownloadResult(correlationId, Erro: RecordingErrors.Expirada);
 
@@ -134,6 +135,25 @@ LEFT JOIN agent ag ON ag.id=ce.id_agent
 
         var bytes = await File.ReadAllBytesAsync(caminho, ct);
         return new RecordingDownloadResult(correlationId, Filename: Path.GetFileName(caminho), Conteudo: bytes);
+    }
+
+    /// Acha o arquivo real a partir do caminho vindo do banco, tolerando a peculiaridade do Issabel:
+    /// a coluna guarda ".wav49" (minúsculo, com sufixo numérico), mas o arquivo no disco é ".WAV"
+    /// (maiúsculo, sem sufixo). Procura pelo MESMO nome-base + qualquer extensão.
+    ///
+    /// Seguro: o diretório vem do caminho já validado por ResolverSeguro, e EnumerateFiles só
+    /// devolve arquivos DENTRO dele — não há como escapar da pasta de gravações.
+    private static string? EncontrarArquivoReal(string caminhoValidado)
+    {
+        // Caso literal — alguns clientes podem gravar exatamente o que está no banco.
+        if (File.Exists(caminhoValidado)) return caminhoValidado;
+
+        var dir = Path.GetDirectoryName(caminhoValidado);
+        if (dir is null || !Directory.Exists(dir)) return null;
+
+        // "q-1-...286.wav49" → base "q-1-...286"; procura "q-1-...286.*".
+        var semExt = Path.GetFileNameWithoutExtension(caminhoValidado);
+        return Directory.EnumerateFiles(dir, semExt + ".*").FirstOrDefault();
     }
 
     /// Monta o WHERE e os parâmetros compartilhados entre a contagem e a página.
