@@ -10,25 +10,39 @@ namespace DashCall.Collector.Sources;
 ///
 /// Resiliência: se uma rodada falhar (erro de query/conexão), loga em Console.Error e CONTINUA —
 /// reemite o último snapshot bom se houver, ou pula a rodada. Nunca derruba o stream.
-public sealed class MariaDbCallCenterSource : ICallCenterSource, IReportSource, IAgentSource, IRecordingSource
+public sealed class MariaDbCallCenterSource
+    : ICallCenterSource, IReportSource, IAgentSource, IRecordingSource, IAgentControlSource
 {
     private readonly CallCenterDb _db;
     private readonly AnalysisDb _analysis;
     private readonly AgentDb _agents;
     private readonly RecordingDb _recordings;
+    private readonly Eccp.EccpAgentSource? _eccp;
     private readonly string _tenantId;
     private readonly int _intervalMs;
 
+    /// <param name="eccp">Controle do agente via ECCP (Módulo 7). Null quando o coletor não tem
+    /// credencial ECCP configurada — o controle fica indisponível, o resto funciona.</param>
     public MariaDbCallCenterSource(
-        string connectionString, string tenantId, string recordingsDir, int intervalMs = 2000)
+        string connectionString, string tenantId, string recordingsDir,
+        Eccp.EccpAgentSource? eccp = null, int intervalMs = 2000)
     {
         _db = new CallCenterDb(connectionString);
         _analysis = new AnalysisDb(connectionString);
         _agents = new AgentDb(connectionString);
         _recordings = new RecordingDb(connectionString, recordingsDir);
+        _eccp = eccp;
         _tenantId = tenantId;
         _intervalMs = intervalMs;
     }
+
+    // ---- Módulo 7: controle do agente (ESCRITA via ECCP) -------------------
+
+    public Task<AgentActionResult> ControlarAgenteAsync(AgentActionRequest req, CancellationToken ct)
+        => _eccp is null
+            ? Task.FromResult(new AgentActionResult(req.CorrelationId, AgentControlState.Failed,
+                "Controle de agente não configurado neste cliente."))
+            : _eccp.ExecutarAsync(req, ct);
 
     // ---- Módulo 3: painel do agente ----------------------------------------
 

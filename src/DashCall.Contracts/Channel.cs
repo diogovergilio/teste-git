@@ -15,7 +15,9 @@ public record CollectorEnvelope(
     RecordingListRequest? RecordingListRequest = null,        // hub->coletor
     RecordingListResult? RecordingListResponse = null,        // coletor->hub
     RecordingDownloadRequest? RecordingDownloadRequest = null, // hub->coletor
-    RecordingDownloadResult? RecordingDownloadResponse = null); // coletor->hub
+    RecordingDownloadResult? RecordingDownloadResponse = null, // coletor->hub
+    AgentActionRequest? AgentActionRequest = null,             // hub->coletor (Módulo 7 — escrita)
+    AgentActionResult? AgentActionResponse = null);            // coletor->hub
 
 /// Pedido de relatório sob demanda (hub->coletor). CorrelationId casa a resposta.
 public record ReportRequest(string CorrelationId, DateTimeOffset Inicio, DateTimeOffset Fim);

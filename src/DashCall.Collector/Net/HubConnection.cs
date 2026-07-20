@@ -193,6 +193,27 @@ public sealed class HubConnection
 
                 await SendAsync(ws, new CollectorEnvelope("recordingDownloadResponse",
                     RecordingDownloadResponse: result), sendLock, ct);
+                continue;
+            }
+
+            // Controle do agente (Módulo 7 — ESCRITA via ECCP).
+            if (env.Type == "agentActionRequest" && env.AgentActionRequest is not null
+                && reports is IAgentControlSource ctrl)
+            {
+                var req = env.AgentActionRequest;
+                AgentActionResult result;
+                try
+                {
+                    result = await ctrl.ControlarAgenteAsync(req, ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                catch (Exception ex)
+                {
+                    result = new AgentActionResult(req.CorrelationId, AgentControlState.Failed, ex.Message);
+                }
+
+                await SendAsync(ws, new CollectorEnvelope("agentActionResponse",
+                    AgentActionResponse: result), sendLock, ct);
             }
         }
     }
