@@ -20,9 +20,11 @@ public static class Fcr
     /// <param name="topN">Quantos números listar em TopRetornos.</param>
     public static FcrBlock Calcular(IEnumerable<CallRow> linhas, TimeSpan janela, int topN = 5)
     {
-        // Anônimos ficam de fora: agrupar callerid vazio criaria "retornos" entre pessoas diferentes.
+        // Anônimos ficam de fora — e isto NÃO é cosmético: "anonymous" agrupa dezenas de pessoas
+        // diferentes sob um único "número", o que inventaria retornos que nunca existiram e
+        // derrubaria o FCR artificialmente. Mesmo motivo do callerid vazio.
         var porNumero = linhas
-            .Where(l => !string.IsNullOrWhiteSpace(l.Callerid))
+            .Where(l => !EhAnonimo(l.Callerid))
             .GroupBy(l => l.Callerid);
 
         int atendidas = 0, primeiroContato = 0;
@@ -60,4 +62,9 @@ public static class Fcr
 
         return new FcrBlock(atendidas, primeiroContato, percent, top);
     }
+
+    /// Chamador não identificável: vazio ou sem nenhum dígito ("anonymous", "unknown",
+    /// "restricted"). Um ramal interno curto continua valendo — é um chamador real.
+    private static bool EhAnonimo(string? callerid) =>
+        string.IsNullOrWhiteSpace(callerid) || !callerid.Any(char.IsDigit);
 }

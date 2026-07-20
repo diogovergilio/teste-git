@@ -155,29 +155,36 @@ WHERE data>=@inicio AND data<@fim;";
 
             if (avaliacoes == 0) return null;
 
-            // Mesma estrutura do painel do Grafana: quando `avaliado` está vazio, o ramal
-            // avaliado é o do `avaliador`.
+            // Agrupa pelo canal cru ("Agent/24"); o nome é resolvido em C# (ver AgentResolver).
+            // Nada de JOIN aqui: `avaliado` guarda o CANAL e não o ramal, o mesmo número aparece
+            // várias vezes em `agent`, e os dois bancos têm collation diferente.
+            //
+            // DESISTIU fora da média: o cliente desligou antes de avaliar, o que o banco grava
+            // como p1=p2=0. Contar isso como "nota zero" puxaria a média para baixo sem que
+            // ninguém tenha avaliado mal. É o mesmo critério das médias P1/P2 acima — se um
+            // incluísse e o outro não, os números do bloco não fechariam entre si.
             const string porAtendente = @"
-SELECT ramal, IFNULL(ag.name,'Não logado') nome, AVG(p2) media, COUNT(*) avaliacoes
-FROM (
-  SELECT p2, avaliado ramal FROM pesquisa.pesquisa
-   WHERE avaliado<>'' AND avaliador<>'' AND data>=@inicio AND data<@fim
-  UNION ALL
-  SELECT p2, avaliador ramal FROM pesquisa.pesquisa
-   WHERE avaliado='' AND avaliador<>'' AND data>=@inicio AND data<@fim
-) t
-LEFT JOIN call_center.agent ag ON ag.number=t.ramal
-GROUP BY ramal, nome ORDER BY media DESC;";
-            var linhas = new List<SatisfactionAgentRow>();
+SELECT avaliado canal, AVG(p2) media, COUNT(*) avaliacoes
+FROM pesquisa.pesquisa
+WHERE avaliado<>'' AND tipo<>'DESISTIU' AND data>=@inicio AND data<@fim
+GROUP BY avaliado ORDER BY media DESC;";
+            var crus = new List<(string Canal, double Media, int Avaliacoes)>();
             await using (var cmd = new MySqlCommand(porAtendente, conn))
             {
                 AddWindow(cmd, inicio, fim);
                 await using var r = await cmd.ExecuteReaderAsync(ct);
                 while (await r.ReadAsync(ct))
-                    linhas.Add(new SatisfactionAgentRow(
-                        r.GetString("ramal"), r.GetString("nome"),
-                        Math.Round(ToDouble(r["media"]), 2), ToInt(r["avaliacoes"])));
+                    crus.Add((r.GetString("canal"), ToDouble(r["media"]), ToInt(r["avaliacoes"])));
             }
+
+            var agentes = await GetAgentesAsync(conn, ct);
+            var linhas = crus
+                .Select(x => new SatisfactionAgentRow(
+                    Ramal(x.Canal),
+                    AgentResolver.Resolver(x.Canal, agentes) ?? $"Ramal {Ramal(x.Canal)}",
+                    Math.Round(x.Media, 2),
+                    x.Avaliacoes))
+                .ToList();
 
             return new SatisfactionBlock(avaliacoes, Math.Round(p1, 2), Math.Round(p2, 2), linhas);
         }
@@ -192,6 +199,29 @@ GROUP BY ramal, nome ORDER BY media DESC;";
             }
             return null;
         }
+    }
+
+    /// Cadastro de agentes (tabela pequena — dezenas de linhas). Lido inteiro para resolver os
+    /// canais em memória, onde a regra de desempate é testável e a collation não atrapalha.
+    private static async Task<List<AgentRow>> GetAgentesAsync(MySqlConnection conn, CancellationToken ct)
+    {
+        const string sql = "SELECT id, number, name, type, estatus FROM call_center.agent;";
+        var rows = new List<AgentRow>();
+        await using var cmd = new MySqlCommand(sql, conn);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct))
+            rows.Add(new AgentRow(
+                ToInt(r["id"]), r["number"]?.ToString() ?? "", r["name"]?.ToString() ?? "",
+                r["type"]?.ToString() ?? "", r["estatus"]?.ToString() ?? ""));
+
+        return rows;
+    }
+
+    /// "Agent/24" → "24" (o que o gestor reconhece como ramal).
+    private static string Ramal(string canal)
+    {
+        var barra = canal.IndexOf('/');
+        return (barra >= 0 ? canal[(barra + 1)..] : canal).Trim();
     }
 
     private static void AddWindow(MySqlCommand cmd, DateTime inicio, DateTime fim)
