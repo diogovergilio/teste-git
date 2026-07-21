@@ -57,6 +57,7 @@ ORDER BY (estatus='A') DESC, name;";
         var hoje = await GetHojeAsync(conn, agentId, ct);
         var semana = await GetSemanaAsync(conn, agentId, ct);
         var satisfacao = await GetSatisfacaoAsync(conn, cadastro, ct);
+        var pausas = await GetPausasAsync(conn, ct);
 
         return new AgentDetail(
             Id: cadastro.Id,
@@ -68,7 +69,20 @@ ORDER BY (estatus='A') DESC, name;";
             BreakSeconds: breakSeconds,
             Hoje: hoje,
             Semana: semana,
-            Satisfacao: satisfacao);
+            Satisfacao: satisfacao,
+            Pausas: pausas);
+    }
+
+    /// Motivos de pausa disponíveis (mesma seleção do daemon: tipo 'B', status 'A').
+    private static async Task<List<BreakOption>> GetPausasAsync(MySqlConnection conn, CancellationToken ct)
+    {
+        const string sql = "SELECT id, name FROM break WHERE tipo='B' AND status='A' ORDER BY name;";
+        var pausas = new List<BreakOption>();
+        await using var cmd = new MySqlCommand(sql, conn);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct))
+            pausas.Add(new BreakOption(ToInt(r["id"]), r["name"]?.ToString() ?? ""));
+        return pausas;
     }
 
     private static async Task<AgentSummary?> GetCadastroAsync(

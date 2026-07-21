@@ -17,8 +17,13 @@ public record AgentToday(
     int PausaSeconds,
     int? PosicaoRanking);
 
+/// Motivo de pausa disponível (tabela `break` do cliente), para o combo de pausa do Módulo 7.
+public record BreakOption(int Id, string Nome);
+
 /// Painel individual do agente (somente leitura).
 /// <paramref name="Satisfacao"/> é null quando o cliente não tem pesquisa — mesma regra da folha 2.
+/// <paramref name="Pausas"/> alimenta o combo de motivos do controle (Módulo 7); aditivo (coletor
+/// antigo manda vazio).
 public record AgentDetail(
     int Id,
     string Number,
@@ -29,7 +34,8 @@ public record AgentDetail(
     int BreakSeconds,
     AgentToday Hoje,
     IReadOnlyList<AgentDay> Semana,
-    AgentSatisfaction? Satisfacao);
+    AgentSatisfaction? Satisfacao,
+    IReadOnlyList<BreakOption>? Pausas = null);
 
 /// Nota do agente na pesquisa de satisfação, no período da série.
 public record AgentSatisfaction(double Media, int Avaliacoes);
